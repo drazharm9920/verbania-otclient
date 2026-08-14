@@ -321,6 +321,18 @@ void Tile::addThing(const ThingPtr& thing, int stackPos)
 
     const uint8_t size = m_things.size();
 
+    if (g_game.getClientVersion() == 860 && thing->isItem()) {
+    g_logger.info(fmt::format(
+        "[STACK DEBUG] item={} stackPos={} priority={} isOnBottom={} isOnTop={} isCommon={}",
+        thing->getId(),
+        stackPos,
+        thing->getStackPriority(),
+        thing->isOnBottom(),
+        thing->isOnTop(),
+        thing->isCommon()
+    ));
+}
+
     // priority                                    854
     // 0 - ground,                        -->      -->
     // 1 - ground borders                 -->      -->
