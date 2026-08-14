@@ -1,0 +1,108 @@
+name: Debug Stack 860
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  build:
+    name: CMake Release - Stack 860 Debug
+    runs-on: windows-2025
+
+    env:
+      VCPKG_BINARY_CACHE_ACCESS: read
+      VCPKG_BINARY_SOURCES: "clear;nuget,https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json,read;nugettimeout,600"
+      VCPKG_NUGET_REPOSITORY: https://github.com/${{ github.repository }}.git
+      VCPKG_NUGET_API_KEY: ${{ github.token }}
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+      SCCACHE_DIR: ${{ github.workspace }}\.sccache
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Export GitHub Actions cache environment variables
+        uses: actions/github-script@v9
+        with:
+          script: |
+            core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
+            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
+
+      - name: Get vcpkg baseline
+        shell: pwsh
+        run: |
+          $json = Get-Content vcpkg.json -Raw | ConvertFrom-Json
+          $vcpkgCommitId = $json.'builtin-baseline'
+          "VCPKG_GIT_COMMIT_ID=$vcpkgCommitId" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Remove Windows pre-installed MySQL
+        shell: pwsh
+        run: Remove-Item -Recurse -Force C:\mysql* -ErrorAction SilentlyContinue
+
+      - name: Prepare sccache directory
+        shell: pwsh
+        run: New-Item -ItemType Directory -Force -Path $env:SCCACHE_DIR | Out-Null
+
+      - name: CCache
+        uses: hendrikmuhs/ccache-action@v1.2.23
+        with:
+          max-size: "1G"
+          variant: "sccache"
+          key: ccache-windows-stack-860
+          restore-keys: |
+            ccache-windows
+            ccache-windows-stack-860
+
+      - name: Setup NuGet source for GitHub Packages
+        shell: pwsh
+        env:
+          NUGET_AUTH_TOKEN: ${{ env.VCPKG_NUGET_API_KEY }}
+        run: |
+          $feed = "https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json"
+          $nuget = (Get-Command nuget.exe -ErrorAction SilentlyContinue).Source
+
+          if (-not $nuget) {
+            throw "nuget.exe not found in PATH"
+          }
+
+          & $nuget sources remove -Name "GitHubPackages" 2>&1 | Out-Null
+          & $nuget sources add `
+            -Name "GitHubPackages" `
+            -Source $feed `
+            -UserName "${{ github.repository_owner }}" `
+            -Password "$env:NUGET_AUTH_TOKEN" `
+            -StorePasswordInClearText
+
+          & $nuget setapikey "$env:NUGET_AUTH_TOKEN" -Source $feed
+          & $nuget sources list
+
+      - name: Setup vcpkg
+        uses: lukka/run-vcpkg@v11
+        with:
+          vcpkgDirectory: ${{ github.workspace }}
+          vcpkgGitURL: "https://github.com/microsoft/vcpkg.git"
+          vcpkgGitCommitId: ${{ env.VCPKG_GIT_COMMIT_ID }}
+
+      - name: Run CMake
+        uses: lukka/run-cmake@v10
+        with:
+          configurePreset: windows-release
+          buildPreset: windows-release
+          configurePresetAdditionalArgs: "['-DTOGGLE_BIN_FOLDER=ON', '-DOPTIONS_ENABLE_IPO=OFF', '-DOTCLIENT_BUILD_TESTS=OFF']"
+
+      - name: Show generated files
+        shell: pwsh
+        run: |
+          Write-Host "=== BUILD OUTPUT ==="
+          Get-ChildItem -Path build/windows-release/bin -Recurse -File |
+            Select-Object FullName, Length |
+            Format-Table -AutoSize
+
+      - name: Upload debug artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-stack-860-debug
+          path: build/windows-release/bin/
